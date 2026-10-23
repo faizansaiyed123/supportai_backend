@@ -1,0 +1,24 @@
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI dependency injection calls Depends(...) at signature-eval time, which B008 flags.
+# This is the supported FastAPI idiom - see https://docs.pydantic.dev/latest/integrations/using-ruff/#ruff-config.
+"app/**" = ["B008"]
+# Tests intentionally assert against broad Exception in a few places to verify that
+# arbitrary failures are surfaced as a failed document/ingestion state, and routinely
+# contain long string fixtures/URLs that are cleaner left unwrapped.
+"tests/**/*.py" = ["B017", "E501"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+disallow_untyped_defs = false

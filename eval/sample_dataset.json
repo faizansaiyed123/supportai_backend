@@ -1,0 +1,42 @@
+{
+  "description": "Small representative RAG evaluation dataset (Sec. 25). Each case assumes the corresponding document (by title) has already been uploaded and ingested (status='ready') for the target org before running scripts/eval/run_rag_eval.py. This is a STARTER set (6 cases) meant to be extended, not a comprehensive benchmark - real coverage should grow alongside the actual knowledge base content once there is one.",
+  "cases": [
+    {
+      "id": "refund-timing",
+      "question": "How long does a refund take to process?",
+      "relevant_document_titles": ["Billing FAQ", "Refund Policy"],
+      "expected_answer_keywords": ["5", "business", "days"]
+    },
+    {
+      "id": "password-reset",
+      "question": "How do I reset my password?",
+      "relevant_document_titles": ["Account Management Guide"],
+      "expected_answer_keywords": ["reset", "email", "link"]
+    },
+    {
+      "id": "cancel-subscription",
+      "question": "How can I cancel my subscription?",
+      "relevant_document_titles": ["Billing FAQ", "Subscription Management"],
+      "expected_answer_keywords": ["cancel", "subscription", "settings"]
+    },
+    {
+      "id": "data-export",
+      "question": "Can I export my data before deleting my account?",
+      "relevant_document_titles": ["Account Management Guide", "Privacy FAQ"],
+      "expected_answer_keywords": ["export", "data", "account"]
+    },
+    {
+      "id": "unrelated-question",
+      "question": "What is the capital of France?",
+      "relevant_document_titles": [],
+      "expected_answer_keywords": [],
+      "expect_low_confidence": true
+    },
+    {
+      "id": "invoice-download",
+      "question": "Where can I download past invoices?",
+      "relevant_document_titles": ["Billing FAQ"],
+      "expected_answer_keywords": ["invoice", "download", "billing"]
+    }
+  ]
+}

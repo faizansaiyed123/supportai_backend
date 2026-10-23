@@ -1,0 +1,55 @@
+# Keep the build context small and stop host-only state from leaking into the image.
+# Nothing excluded here is needed by the build: the Dockerfile installs dependencies from
+# requirements*.txt and copies the source tree.
+
+# Byte-code, tooling caches.
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments.
+.venv/
+venv/
+env/
+
+# Local secrets. The image gets its configuration from docker-compose.yml, never from a file on
+# the host - baking a developer's .env (JWT secrets, DB passwords) into a published image layer
+# would leak them to anyone who can pull it.
+.env
+.env.*
+!.env.example
+
+# Runtime data. Uploads and the HuggingFace model cache are named volumes in compose.
+data/
+*.db
+*.sqlite3
+
+# Evaluation output, generated locally.
+eval/results/
+eval/**/results/
+
+# Test and type artifacts.
+.pytest_cache/
+.mypy_cache/
+
+# VCS / editor / OS noise.
+.git
+.gitignore
+.github
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Docs and Docker files are not needed inside the image.
+docs/
+README.md
+DESIGN.md
+Dockerfile
+docker-compose.yml
+.dockerignore

@@ -1,0 +1,218 @@
+# Standalone Docker setup for the backend repository.
+#
+#     docker compose up --build
+#
+# This file is self-contained on purpose: cloning only the backend repository and running the
+# command above brings up everything the API needs - PostgreSQL (with pgvector), Ollama, the
+# Procrastinate background worker, and the FastAPI app on port 8000.
+#
+# The frontend is a SEPARATE repository with its own compose file. Tell the backend which origin
+# may call it (CORS forbids a wildcard for cookie-authenticated requests):
+#
+#     ALLOWED_ORIGINS=http://localhost:3000 docker compose up --build
+#
+# On Windows PowerShell:
+#
+#     $env:ALLOWED_ORIGINS="http://localhost:3000"; docker compose up --build
+#
+# Every value below is `${VAR:-default}`, so a fresh clone runs with no .env at all. Compose
+# automatically reads a `.env` file sitting next to this compose file for those substitutions, so
+# copying .env.example to .env and editing it is all the configuration that is ever needed.
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-supportai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-supportai_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-supportai}
+    ports:
+      # Host 5434 -> container 5432, so a native Postgres on the host can keep using 5432.
+      - "${POSTGRES_HOST_PORT:-5434}:5432"
+    volumes:
+      - supportai_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-supportai} -d ${POSTGRES_DB:-supportai}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_HOST_PORT:-11434}:11434"
+    volumes:
+      - supportai_ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # Pulls the configured generation model once, then exits. The API waits for it so the first AI
+  # question does not block on a ~4.9GB download mid-request. It is a no-op once the model is in
+  # the supportai_ollama volume. Set SKIP_MODEL_PULL=1 to skip it entirely (AI answers then fail
+  # until the model is pulled by hand); python run.py --skip-model sets this for you.
+  model-pull:
+    image: ollama/ollama:latest
+    restart: "no"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      SKIP_MODEL_PULL: ${SKIP_MODEL_PULL:-0}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        if [ "$$SKIP_MODEL_PULL" = "1" ]; then
+        echo "SKIP_MODEL_PULL=1, not pulling $${OLLAMA_MODEL}";
+        elif ollama list | cut -d' ' -f1 | grep -qx "$${OLLAMA_MODEL}";
+        then echo "model $${OLLAMA_MODEL} already pulled";
+        else echo "pulling $${OLLAMA_MODEL} (about 4.9 GB, first run only)...";
+        ollama pull "$${OLLAMA_MODEL}";
+        fi
+
+  # One-shot database preparation: migrations, job-queue schema, system roles. `api` and `worker`
+  # wait for it to exit 0, so a fresh volume comes up already migrated and seeded. Every step is
+  # idempotent, so this is safe to repeat.
+  init:
+    build:
+      context: .
+    image: supportai-backend:local
+    restart: "no"
+    environment:
+      # Importing app.core.config (which alembic/env.py and the scripts both do) validates the full
+      # Settings model, so every REQUIRED field must be present here - jwt_secret is required even
+      # though migrations never touch auth.
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://supportai:supportai_dev_password@db:5432/supportai}
+      DATABASE_URL_SYNC: ${DATABASE_URL_SYNC:-postgresql+psycopg://supportai:supportai_dev_password@db:5432/supportai}
+      JWT_SECRET: ${JWT_SECRET:-change_me_to_a_long_random_value_in_real_envs}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/data/uploads}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "scripts/init_db.sh"]
+
+  api:
+    build:
+      context: .
+    image: supportai-backend:local
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://supportai:supportai_dev_password@db:5432/supportai}
+      DATABASE_URL_SYNC: ${DATABASE_URL_SYNC:-postgresql+psycopg://supportai:supportai_dev_password@db:5432/supportai}
+      JWT_SECRET: ${JWT_SECRET:-change_me_to_a_long_random_value_in_real_envs}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-30}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
+      LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/data/uploads}
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-25}
+      AI_GENERATION_PROVIDER: ${AI_GENERATION_PROVIDER:-ollama}
+      AI_EMBEDDING_PROVIDER: ${AI_EMBEDDING_PROVIDER:-local_sentence_transformers}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      AI_GENERATION_TIMEOUT_SECONDS: ${AI_GENERATION_TIMEOUT_SECONDS:-600}
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-BAAI/bge-small-en-v1.5}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-384}
+      RERANK_ENABLED: ${RERANK_ENABLED:-true}
+      AI_RERANK_PROVIDER: ${AI_RERANK_PROVIDER:-cross_encoder_local}
+      RERANK_MODEL_NAME: ${RERANK_MODEL_NAME:-cross-encoder/ms-marco-MiniLM-L-6-v2}
+      RERANK_CANDIDATE_POOL_SIZE: ${RERANK_CANDIDATE_POOL_SIZE:-20}
+      RERANK_TOP_N: ${RERANK_TOP_N:-5}
+      HOSTED_AI_API_KEY: ${HOSTED_AI_API_KEY:-}
+      HOSTED_AI_BASE_URL: ${HOSTED_AI_BASE_URL:-}
+      # Dev-stack-only rate limit overrides. The defaults in app/core/config.py (5
+      # registrations/min, 10 logins/min per IP) are tuned for abuse resistance; the Playwright
+      # suite registers a fresh org for nearly every test from one client IP, which trips them and
+      # turns healthy tests into 429 timeouts. Overriding them here rather than in .env keeps the
+      # strict defaults for anything reading that file directly (e.g. the pytest suite, which
+      # asserts the login limiter still blocks at 10/min). The limiter is per-process in-memory, so
+      # only the api service needs them.
+      RATE_LIMIT_REGISTER_PER_MINUTE: ${RATE_LIMIT_REGISTER_PER_MINUTE:-1000}
+      RATE_LIMIT_LOGIN_PER_MINUTE: ${RATE_LIMIT_LOGIN_PER_MINUTE:-1000}
+    depends_on:
+      db:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+      model-pull:
+        condition: service_completed_successfully
+    ports:
+      - "${API_HOST_PORT:-8000}:8000"
+    volumes:
+      - ./:/app
+      - supportai_uploads:/app/data/uploads
+      # Sentence-transformers/cross-encoder weights are hundreds of MB. Without a named volume
+      # every rebuild re-downloads BAAI/bge-small-en-v1.5 and the cross-encoder from scratch.
+      - supportai_hf_cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/api/health/ready || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    # Reload is a dev-only convenience; production runs a single stable uvicorn worker.
+    # The branch is chosen at runtime by scripts/start.sh from $ENVIRONMENT, so the same
+    # compose file works for dev and prod and `docker compose run -e ENVIRONMENT=production`
+    # switches modes without rewriting the file. --proxy-headers is always safe and lets a
+    # TLS-terminating reverse proxy be trusted in production.
+    command: ["sh", "scripts/start.sh"]
+
+  # Document ingestion runs off the request path: the API enqueues a Procrastinate job and this
+  # container executes it.
+  worker:
+    build:
+      context: .
+    image: supportai-backend:local
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://supportai:supportai_dev_password@db:5432/supportai}
+      DATABASE_URL_SYNC: ${DATABASE_URL_SYNC:-postgresql+psycopg://supportai:supportai_dev_password@db:5432/supportai}
+      JWT_SECRET: ${JWT_SECRET:-change_me_to_a_long_random_value_in_real_envs}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
+      LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/data/uploads}
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-25}
+      AI_GENERATION_PROVIDER: ${AI_GENERATION_PROVIDER:-ollama}
+      AI_EMBEDDING_PROVIDER: ${AI_EMBEDDING_PROVIDER:-local_sentence_transformers}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-BAAI/bge-small-en-v1.5}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-384}
+      RERANK_ENABLED: ${RERANK_ENABLED:-true}
+      AI_RERANK_PROVIDER: ${AI_RERANK_PROVIDER:-cross_encoder_local}
+      RERANK_MODEL_NAME: ${RERANK_MODEL_NAME:-cross-encoder/ms-marco-MiniLM-L-6-v2}
+      RERANK_CANDIDATE_POOL_SIZE: ${RERANK_CANDIDATE_POOL_SIZE:-20}
+      RERANK_TOP_N: ${RERANK_TOP_N:-5}
+    depends_on:
+      db:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ./:/app
+      - supportai_uploads:/app/data/uploads
+      - supportai_hf_cache:/root/.cache/huggingface
+    command: ["sh", "-c", "exec python -m procrastinate --app=app.workers.app.procrastinate_app worker --concurrency ${WORKER_CONCURRENCY:-4}"]
+
+volumes:
+  supportai_pgdata:
+  supportai_ollama:
+  supportai_uploads:
+  supportai_hf_cache:
