@@ -35,4 +35,4 @@ jobs:
         run: ruff check --ignore E501,I001 app/demo_api.py demo_tests
 
       - name: Test isolated demo API
-        run: pytest -q demo_tests
+        run: PYTHONPATH=. pytest -q demo_tests
