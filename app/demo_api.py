@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+import time
 from typing import Any
 from urllib.parse import unquote, quote
 
@@ -46,7 +47,7 @@ def _copy(value: Any) -> Any:
 
 
 def _new_id(prefix: str) -> str:
-    return f"{prefix}-{datetime.now(UTC).timestamp_ns()}"
+    return f"{prefix}-{time.time_ns()}"
 
 
 def _seed() -> dict[str, list[dict[str, Any]]]:
