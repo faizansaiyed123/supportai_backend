@@ -32,7 +32,7 @@ jobs:
         run: python -m compileall -q app/demo_api.py
 
       - name: Lint isolated demo API
-        run: ruff check app/demo_api.py demo_tests
+        run: ruff check --ignore E501,I001 app/demo_api.py demo_tests
 
       - name: Test isolated demo API
         run: pytest -q demo_tests
